@@ -12,7 +12,7 @@ public class Sparky1 {
 
     public static void main(String[] args) {
         if (args.length < 2){
-            System.out.println("No input file or output location provided");
+            System.out.println("No Input file or Output location provided");
             System.exit(0);
         }
 

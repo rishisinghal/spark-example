@@ -1,0 +1,11 @@
+steps:
+  - name: maven:3-jdk-8
+    entrypoint: mvn
+    args: ["test"]
+
+  - name: maven:3-jdk-8
+    entrypoint: mvn
+    args: ["clean","package", "-Dmaven.test.skip=true"]
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    args: ['gsutil', 'cp', './target/sparky-1.0.jar', 'gs://rislabs/sparky/sparky-1.0.jar']

@@ -1,0 +1,186 @@
+Workflow using Cloud Functions
+Objective:
+Create a Dataproc workflow template that runs a wordcount job
+Create a node.js Cloud function to trigger the wordcount workflow when a file is added to Cloud Storage
+Workflows are "fire and forget". If there are no exceptions when the function that triggers the workflow is submitted, Dataproc will execute the workflow to completion. You do not need to wait on workflow completion within the triggering function.
+Note: Since the function is triggered by adding a new file to a bucket in Cloud Storage, and since the wordcount binary creates and outputs new files to Cloud Storage, to avoid recursion (wordcount processing its output files), this tutorial uses separate input and output buckets.
+Before you begin
+If you haven't already done so, set up a Google Cloud project and two (2) Cloud Storage buckets.
+
+Set up your project
+In the Google Cloud Console, on the project selector page, select or create a Google Cloud project.
+
+Note: If you don't plan to keep the resources that you create in this procedure, create a project instead of selecting an existing project. After you finish these steps, you can delete the project, removing all resources associated with the project.
+Go to project selector
+
+Make sure that billing is enabled for your Cloud project. Learn how to confirm that billing is enabled for your project.
+
+Enable the Dataproc, Compute Engine, Cloud Storage, and Cloud Functions APIs.
+Enable the APIs
+
+Install and initialize the Cloud SDK.
+Create or use two (2) Cloud Storage buckets in your project
+You will need two Cloud Storage buckets in you project: one for input files, and one for output.
+
+In the Cloud Console, go to the Cloud Storage Browser page.
+Go to Browser
+
+Click Create bucket.
+On the Create a bucket page, enter your bucket information. To go to the next step, click Continue.
+For Name your bucket, enter a name that meets the bucket naming requirements.
+For Choose where to store your data, do the following:
+Select a Location type option.
+Select a Location option.
+For Choose a default storage class for your data, select a storage class.
+For Choose how to control access to objects, select an Access control option.
+For Advanced settings (optional), specify an encryption method, a retention policy, or bucket labels.
+Click Create.
+Create a workflow template.
+Copy and run the commands listed below in a local terminal window or in Cloud Shell to create and define a workflow template.
+
+Notes:
+
+The commands specify the "us-central1" region. You can specify a different region or delete the --region flag if you have previously run gcloud config set compute/region to set the region property.
+The "-- " (dash dash space) sequence passes arguments to the jar file. The wordcount input_bucket output_dir command will run the jar's wordcount application on text files contained in the Cloud Storage input_bucket, then output wordcount files to an output_bucket. You will parameterize the wordcount input bucket argument to allow your function to supply this argument.
+Create the workflow template.
+
+gcloud dataproc workflow-templates create wordcount-template \
+    --region=us-central1
+Add the wordcount job to the workflow template.
+Specify your output-bucket-name before running the command (your function will supply the input bucket). After you insert the output-bucket-name, the output bucket argument should read as follows: gs://your-output-bucket/wordcount-output".
+The "count" step ID is required, and identifies the added hadoop job.
+
+gcloud dataproc workflow-templates add-job hadoop \
+    --workflow-template=wordcount-template \
+    --step-id=count \
+    --jar=file:///usr/lib/hadoop-mapreduce/hadoop-mapreduce-examples.jar \
+    --region=us-central1 \
+    -- wordcount gs://input-bucket gs://output-bucket-name/wordcount-output
+Use a managed, single-node cluster to run the workflow. Dataproc will create the cluster, run the workflow on it, then delete the cluster when the workflow completes.
+
+gcloud dataproc workflow-templates set-managed-cluster wordcount-template \
+    --cluster-name=wordcount \
+    --single-node \
+    --region=us-central1
+Click on the wordcount-template name on the Dataproc Workflows page in the Cloud Console to open the Workflow template details page. Confirm the wordcount-template attributes.
+
+Parameterize the workflow template.
+Parameterize the input bucket variable to pass to the workflow template.
+
+Export the workflow template to a wordcount.yaml text file for parameterization.
+
+gcloud dataproc workflow-templates export wordcount-template \
+    --destination=wordcount.yaml \
+    --region=us-central1
+Using a text editor, open wordcount.yaml, then add a parameters block to the end of YAML file so that the Cloud Storage INPUT_BUCKET_URI can be passed as args[1] to the wordcount binary when the workflow is triggered.
+A sample exported YAML file is shown, below. You can take one of two approaches to update your template:
+
+Copy then paste the entire file to replace your exported wordcount.yaml after replacing your-output_bucket with your output bucket name, OR
+Copy then paste only the parameters section to the end of your exported wordcount.yaml file.
+.
+
+jobs:
+- hadoopJob:
+    args:
+    - wordcount
+    - gs://input-bucket
+    - gs://your-output-bucket/wordcount-output
+    mainJarFileUri: file:///usr/lib/hadoop-mapreduce/hadoop-mapreduce-examples.jar
+  stepId: count
+placement:
+  managedCluster:
+    clusterName: wordcount
+    config:
+      softwareConfig:
+        properties:
+          dataproc:dataproc.allow.zero.workers: 'true'
+parameters:
+- name: INPUT_BUCKET_URI
+  description: wordcount input bucket URI
+  fields:
+  - jobs['count'].hadoopJob.args[1]
+Import the parameterized wordcount.yaml text file. Type 'Y'es when asked to overwrite the template.
+
+gcloud dataproc workflow-templates import  wordcount-template \
+    --source=wordcount.yaml \
+    --region=us-central1
+Create a Cloud function
+Open the Cloud Functions page in the Cloud Console, then click CREATE FUNCTION.
+
+On the Create function page, enter or select the following information:
+
+Name: wordcount
+Memory allocated: Keep the default selection.
+Trigger:
+Cloud Storage
+Event Type: Finalize/Create
+Bucket: Select your input bucket (see Create a Cloud Storage bucket in your project). When a file is added to this bucket, the function will trigger the workflow. The workflow will run the wordcount application, which will process all text files in the bucket.
+Source code:
+
+Inline editor
+Runtime: Node.js 8
+INDEX.JS tab: Replace the default code snippet with the following code, then edit the const projectId line to supply -your-project-id- (without a leading or trailing "-").
+
+const dataproc = require('@google-cloud/dataproc').v1;
+
+exports.startWorkflow = (data) => {
+ const projectId = '-your-project-id-'
+ const region = 'us-central1'
+ const workflowTemplate = 'wordcount-template'
+
+const client = new dataproc.WorkflowTemplateServiceClient({
+   apiEndpoint: `${region}-dataproc.googleapis.com`,
+});
+
+const file = data;
+console.log("Event: ", file);
+
+const inputBucketUri = `gs://${file.bucket}/${file.name}`;
+
+const request = {
+  name: client.projectRegionWorkflowTemplatePath(projectId, region, workflowTemplate),
+  parameters: {"INPUT_BUCKET_URI": inputBucketUri}
+};
+
+client.instantiateWorkflowTemplate(request)
+  .then(responses => {
+    console.log("Launched Dataproc Workflow:", responses[1]);
+  })
+  .catch(err => {
+    console.error(err);
+  });
+};
+PACKAGE.JSON tab: Replace the default code snippet with the following code.
+
+{
+  "name": "dataproc-workflow",
+  "version": "1.0.0",
+  "dependencies":{ "@google-cloud/dataproc": ">=1.0.0"}
+}
+Function to execute: Insert: "startWorkflow".
+Click CREATE.
+
+Test your function
+Copy public file rose.txt to your bucket to trigger the function. Insert your-input-bucket-name (the bucket used to trigger your function) in the command.
+
+
+gsutil cp gs://pub/shakespeare/rose.txt gs://your-input-bucket-name
+Wait 30 seconds, then run the following command to verify the function completed successfully.
+
+
+gcloud functions logs read wordcount
+
+...
+Function execution took 1348 ms, finished with status: 'ok'
+To view the function logs from the Functions list page in the Cloud Console, click the wordcount function name, then click VIEW LOGS on the Function details page.
+
+
+You can view the wordcount-output folder in your output bucket from the Storage browser page in the Cloud Console.
+
+
+Note: The wordcount job will fail if the wordcount-output folder exists. Before re-running the workflow by re-triggering your function, first delete the wordcount-output folder in your output bucket. .
+After the workflow completes, job details persist in the Cloud Console. Click the count... job listed on the Dataproc Jobs page to view workflow job details.
+
+
+Cleaning up
+The workflow in this tutorial deletes its managed cluster when the workflow completes. To avoid recurring costs, you can delete other resources associated with this tutorial.

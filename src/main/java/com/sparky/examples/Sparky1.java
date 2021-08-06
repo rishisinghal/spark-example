@@ -8,6 +8,7 @@ import scala.Tuple2;
 
 import java.util.Arrays;
 
+// Sample worcount spark job
 public class Sparky1 {
 
     public static void main(String[] args) {
